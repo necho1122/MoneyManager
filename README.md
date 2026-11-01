@@ -10,7 +10,7 @@ Aplicación personal para revisar ingresos, gastos, cuentas e inversiones desde 
 4. Crea la base de datos de Firestore e instala las reglas de `firestore.rules`.
 5. Ejecuta `npm install` y `npm run dev`.
 
-Las cuentas y movimientos se guardan bajo `users/{uid}`. Las reglas impiden que otros usuarios lean o escriban esos documentos.
+Las cuentas, categorías personalizadas y movimientos se guardan bajo `users/{uid}`. Las reglas impiden que otros usuarios lean o escriban esos documentos. Puedes ajustar el saldo inicial de una cuenta sin alterar los movimientos, y crear categorías y subcategorías al registrar una operación.
 
 ## Despliegue en Vercel
 

@@ -8,6 +8,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  updateDoc,
 } from "firebase/firestore";
 import {
   onAuthStateChanged,
@@ -29,6 +30,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  Pencil,
   Plus,
   ShoppingBag,
   TrendingUp,
@@ -49,10 +51,17 @@ type Movement = {
   id: string;
   amount: number;
   category: string;
+  subcategory?: string;
   date: string;
   note: string;
   accountId: string;
   type: MovementType;
+};
+type UserCategory = {
+  id: string;
+  type: MovementType;
+  name: string;
+  parentName: string | null;
 };
 
 const categories: Record<MovementType, string[]> = {
@@ -154,11 +163,16 @@ export default function Home() {
   });
   const [activePage, setActivePage] = useState<"overview" | "movements" | "accounts">("overview");
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [userCategories, setUserCategories] = useState<UserCategory[]>([]);
   const [allMovements, setAllMovements] = useState<Movement[]>([]);
   const [dataReady, setDataReady] = useState(false);
   const [dataError, setDataError] = useState("");
-  const [modal, setModal] = useState<"movement" | "account" | null>(null);
+  const [modal, setModal] = useState<"movement" | "account" | "category" | null>(null);
+  const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [movementType, setMovementType] = useState<MovementType>("expense");
+  const [selectedCategory, setSelectedCategory] = useState(categories.expense[0]);
+  const [selectedSubcategory, setSelectedSubcategory] = useState("");
+  const [categoryKind, setCategoryKind] = useState<"category" | "subcategory">("category");
   const [mobileNav, setMobileNav] = useState(false);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState("");
@@ -177,6 +191,7 @@ export default function Home() {
   useEffect(() => {
     if (!user || !db) {
       setAccounts([]);
+      setUserCategories([]);
       setAllMovements([]);
       setDataReady(false);
       return;
@@ -184,9 +199,10 @@ export default function Home() {
     setDataReady(false);
     setDataError("");
     let accountsLoaded = false;
+    let categoriesLoaded = false;
     let movementsLoaded = false;
     const markReady = () => {
-      if (accountsLoaded && movementsLoaded) setDataReady(true);
+      if (accountsLoaded && categoriesLoaded && movementsLoaded) setDataReady(true);
     };
     const accountUnsubscribe = onSnapshot(
       collection(db, "users", user.uid, "accounts"),
@@ -196,6 +212,15 @@ export default function Home() {
         markReady();
       },
       (error) => { setDataError(`No se pudieron cargar las cuentas: ${error.message}`); setDataReady(true); },
+    );
+    const categoryUnsubscribe = onSnapshot(
+      collection(db, "users", user.uid, "categories"),
+      (snapshot) => {
+        setUserCategories(snapshot.docs.map((item) => ({ id: item.id, ...item.data() } as UserCategory)));
+        categoriesLoaded = true;
+        markReady();
+      },
+      (error) => { setDataError(`No se pudieron cargar las categorías: ${error.message}`); setDataReady(true); },
     );
     const movementQuery = query(collection(db, "users", user.uid, "movements"), orderBy("date", "desc"));
     const movementUnsubscribe = onSnapshot(
@@ -207,8 +232,24 @@ export default function Home() {
       },
       (error) => { setDataError(`No se pudieron cargar los movimientos: ${error.message}`); setDataReady(true); },
     );
-    return () => { accountUnsubscribe(); movementUnsubscribe(); };
+    return () => { accountUnsubscribe(); categoryUnsubscribe(); movementUnsubscribe(); };
   }, [user]);
+
+  const rootCategories = useMemo(() => {
+    const customNames = userCategories
+      .filter((item) => item.type === movementType && item.parentName === null)
+      .map((item) => item.name);
+    return [...categories[movementType], ...customNames.filter(
+      (name) => !categories[movementType].some((item) => item.toLocaleLowerCase() === name.toLocaleLowerCase()),
+    )];
+  }, [movementType, userCategories]);
+
+  const availableSubcategories = useMemo(
+    () => userCategories
+      .filter((item) => item.type === movementType && item.parentName === selectedCategory)
+      .map((item) => item.name),
+    [movementType, selectedCategory, userCategories],
+  );
 
   const movements = useMemo(
     () => allMovements.filter((item) => item.date >= monthStart(month) && item.date < nextMonthStart(month)),
@@ -230,7 +271,8 @@ export default function Home() {
 
   const expensesByCategory = useMemo(() => {
     const grouped = movements.filter((item) => item.type === "expense").reduce<Record<string, number>>((acc, item) => {
-      acc[item.category] = (acc[item.category] || 0) + item.amount;
+      const label = item.subcategory ? `${item.category} · ${item.subcategory}` : item.category;
+      acc[label] = (acc[label] || 0) + item.amount;
       return acc;
     }, {});
     return Object.entries(grouped).sort((a, b) => b[1] - a[1]);
@@ -265,6 +307,7 @@ export default function Home() {
         type: formData.get("type"),
         amount,
         category: formData.get("category"),
+        subcategory: formData.get("subcategory") || "",
         accountId: formData.get("accountId"),
         date: formData.get("date"),
         note: String(formData.get("note") || "").trim(),
@@ -282,27 +325,100 @@ export default function Home() {
     event.preventDefault();
     if (!db || !user) return;
     const formData = new FormData(event.currentTarget);
-    const name = String(formData.get("name") || "").trim();
     const openingBalance = Number(formData.get("openingBalance"));
-    if (!name || !Number.isFinite(openingBalance) || openingBalance < 0) {
-      setActionError("Revisa el nombre y el saldo inicial de la cuenta.");
+    if (!Number.isFinite(openingBalance) || openingBalance < 0) {
+      setActionError("Introduce un saldo inicial válido, igual o mayor que cero.");
       return;
     }
     setSaving(true);
     setActionError("");
     try {
-      await addDoc(collection(db, "users", user.uid, "accounts"), {
-        name,
-        type: formData.get("type"),
-        openingBalance,
-        createdAt: new Date().toISOString(),
-      });
+      if (editingAccount) {
+        await updateDoc(doc(db, "users", user.uid, "accounts", editingAccount.id), { openingBalance });
+      } else {
+        const name = String(formData.get("name") || "").trim();
+        if (!name) {
+          setActionError("Escribe un nombre para la cuenta.");
+          return;
+        }
+        await addDoc(collection(db, "users", user.uid, "accounts"), {
+          name,
+          type: formData.get("type"),
+          openingBalance,
+          createdAt: new Date().toISOString(),
+        });
+      }
       setModal(null);
+      setEditingAccount(null);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "No se pudo guardar la cuenta.");
     } finally {
       setSaving(false);
     }
+  };
+
+  const submitCategory = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!db || !user) return;
+    const formData = new FormData(event.currentTarget);
+    const name = String(formData.get("name") || "").trim();
+    const parentName = categoryKind === "subcategory" ? String(formData.get("parentName") || "") : null;
+    if (!name) {
+      setActionError("Escribe un nombre para la categoría.");
+      return;
+    }
+    const siblings = categoryKind === "subcategory"
+      ? userCategories.filter((item) => item.type === movementType && item.parentName === parentName)
+      : userCategories.filter((item) => item.type === movementType && item.parentName === null);
+    const duplicate = siblings.some((item) => item.name.toLocaleLowerCase() === name.toLocaleLowerCase())
+      || (parentName === null && categories[movementType].some((item) => item.toLocaleLowerCase() === name.toLocaleLowerCase()));
+    if (duplicate) {
+      setActionError("Ya existe una categoría con ese nombre en este grupo.");
+      return;
+    }
+    setSaving(true);
+    setActionError("");
+    try {
+      await addDoc(collection(db, "users", user.uid, "categories"), {
+        type: movementType,
+        name,
+        parentName,
+        createdAt: new Date().toISOString(),
+      });
+      if (parentName) {
+        setSelectedCategory(parentName);
+        setSelectedSubcategory(name);
+      } else {
+        setSelectedCategory(name);
+        setSelectedSubcategory("");
+      }
+      setModal("movement");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "No se pudo guardar la categoría.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openMovementModal = () => {
+    setActionError("");
+    setEditingAccount(null);
+    setMovementType("expense");
+    setSelectedCategory(categories.expense[0]);
+    setSelectedSubcategory("");
+    setModal("movement");
+  };
+
+  const openAccountModal = (account?: Account) => {
+    setActionError("");
+    setEditingAccount(account || null);
+    setModal("account");
+  };
+
+  const openCategoryModal = () => {
+    setActionError("");
+    setCategoryKind("category");
+    setModal("category");
   };
 
   const removeMovement = async (movement: Movement) => {
@@ -355,7 +471,7 @@ export default function Home() {
               <span>{formatMonth(month)}</span>
               <button onClick={() => setMonth(getMonthOffset(month, 1))} aria-label="Mes siguiente"><ArrowRight size={16} /></button>
             </div>
-            <button className="primary-button add-button" onClick={() => { setActionError(""); setMovementType("expense"); setModal("movement"); }}><Plus size={18} /><span>Nuevo movimiento</span></button>
+            <button className="primary-button add-button" onClick={openMovementModal}><Plus size={18} /><span>Nuevo movimiento</span></button>
           </div>
         </header>
 
@@ -380,27 +496,27 @@ export default function Home() {
                     {expensesByCategory.length ? <SpendingChart data={expensesByCategory} total={totals.expenses} /> : <EmptyState title="Aún no hay gastos" text="Cuando registres alguno, aquí verás cómo se reparte." />}
                   </div>
                   <div className="panel accounts-panel">
-                    <div className="panel-heading"><div><h3>Tus cuentas</h3><p>Tu dinero, en cada lugar</p></div><button className="icon-button" onClick={() => { setActionError(""); setModal("account"); }} aria-label="Añadir cuenta"><Plus size={18} /></button></div>
-                    {totals.accountBalances.length ? <div className="account-list">{totals.accountBalances.slice(0, 4).map((account) => <AccountRow account={account} key={account.id} />)}</div> : <EmptyState title="Empieza por tus cuentas" text="Añade dónde tienes tu dinero para empezar a organizarte." action={() => setModal("account")} />}
+                    <div className="panel-heading"><div><h3>Tus cuentas</h3><p>Tu dinero, en cada lugar</p></div><button className="icon-button" onClick={() => openAccountModal()} aria-label="Añadir cuenta"><Plus size={18} /></button></div>
+                    {totals.accountBalances.length ? <div className="account-list">{totals.accountBalances.slice(0, 4).map((account) => <AccountRow account={account} key={account.id} onEdit={() => openAccountModal(account)} />)}</div> : <EmptyState title="Empieza por tus cuentas" text="Añade dónde tienes tu dinero para empezar a organizarte." action={() => openAccountModal()} />}
                     {accounts.length > 4 && <button className="text-button account-more" onClick={() => setActivePage("accounts")}>Ver todas <ArrowRight size={15} /></button>}
                   </div>
                 </section>
                 <section className="panel recent-panel">
                   <div className="panel-heading"><div><h3>Lo último</h3><p>Movimientos recientes de este mes</p></div><button className="text-button" onClick={() => setActivePage("movements")}>Ver todo <ArrowRight size={15} /></button></div>
-                  {movements.length ? <MovementTable movements={movements.slice(0, 5)} accounts={accounts} onDelete={removeMovement} /> : <EmptyState title="Todavía no hay movimientos" text="Anota tu primer ingreso, gasto o inversión." action={() => setModal("movement")} />}
+                  {movements.length ? <MovementTable movements={movements.slice(0, 5)} accounts={accounts} onDelete={removeMovement} /> : <EmptyState title="Todavía no hay movimientos" text="Anota tu primer ingreso, gasto o inversión." action={openMovementModal} />}
                 </section>
               </>
             )}
             {activePage === "movements" && (
               <section className="panel page-panel">
                 <div className="panel-heading"><div><h3>Todos tus movimientos</h3><p>Ingresos, gastos e inversiones de {formatMonth(month)}</p></div><span className="subtle-chip">{movements.length} registros</span></div>
-                {movements.length ? <MovementTable movements={movements} accounts={accounts} onDelete={removeMovement} /> : <EmptyState title="Este mes está en blanco" text="Añade un movimiento para empezar a llevar el control." action={() => setModal("movement")} />}
+                {movements.length ? <MovementTable movements={movements} accounts={accounts} onDelete={removeMovement} /> : <EmptyState title="Este mes está en blanco" text="Añade un movimiento para empezar a llevar el control." action={openMovementModal} />}
               </section>
             )}
             {activePage === "accounts" && (
               <section className="panel page-panel">
-                <div className="panel-heading"><div><h3>Tus cuentas</h3><p>Organiza dónde guardas tu dinero</p></div><button className="primary-button" onClick={() => { setActionError(""); setModal("account"); }}><Plus size={17} /> Añadir cuenta</button></div>
-                {totals.accountBalances.length ? <div className="account-grid">{totals.accountBalances.map((account) => <AccountCard account={account} key={account.id} />)}</div> : <EmptyState title="Aún no tienes cuentas" text="Añade tu cuenta bancaria, efectivo o ahorros." action={() => setModal("account")} />}
+                <div className="panel-heading"><div><h3>Tus cuentas</h3><p>Organiza dónde guardas tu dinero</p></div><button className="primary-button" onClick={() => openAccountModal()}><Plus size={17} /> Añadir cuenta</button></div>
+                {totals.accountBalances.length ? <div className="account-grid">{totals.accountBalances.map((account) => <AccountCard account={account} key={account.id} onEdit={() => openAccountModal(account)} />)}</div> : <EmptyState title="Aún no tienes cuentas" text="Añade tu cuenta bancaria, efectivo o ahorros." action={() => openAccountModal()} />}
               </section>
             )}
           </>
@@ -412,28 +528,43 @@ export default function Home() {
       {modal && (
         <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setModal(null); }}>
           <section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-            <div className="modal-heading"><div><span className="eyebrow">{modal === "movement" ? "ANOTA UN MOVIMIENTO" : "ORGANIZA TU DINERO"}</span><h2 id="modal-title">{modal === "movement" ? "Nuevo movimiento" : "Nueva cuenta"}</h2></div><button className="icon-button" onClick={() => setModal(null)} aria-label="Cerrar"><X size={19} /></button></div>
-            {modal === "movement" ? (
-              <form onSubmit={submitMovement} className="modal-form">
-                <label>Tipo de movimiento<select name="type" value={movementType} onChange={(event) => setMovementType(event.target.value as MovementType)}><option value="expense">Gasto</option><option value="income">Ingreso</option><option value="investment">Inversión</option></select></label>
+            <div className="modal-heading"><div><span className="eyebrow">{modal === "movement" ? "ANOTA UN MOVIMIENTO" : modal === "category" ? "PERSONALIZA TUS CATEGORÍAS" : "ORGANIZA TU DINERO"}</span><h2 id="modal-title">{modal === "movement" ? "Nuevo movimiento" : modal === "category" ? categoryKind === "category" ? "Nueva categoría" : "Nueva subcategoría" : editingAccount ? "Editar saldo inicial" : "Nueva cuenta"}</h2></div><button className="icon-button" onClick={() => setModal(null)} aria-label="Cerrar"><X size={19} /></button></div>
+            {(modal === "movement" || modal === "category") && <>
+              <form onSubmit={submitMovement} className={`modal-form${modal === "category" ? " modal-form-hidden" : ""}`}>
+                <label>Tipo de movimiento<select name="type" value={movementType} onChange={(event) => { const type = event.target.value as MovementType; setMovementType(type); setSelectedCategory(categories[type][0]); setSelectedSubcategory(""); }}><option value="expense">Gasto</option><option value="income">Ingreso</option><option value="investment">Inversión</option></select></label>
                 <label>Importe (€)<input name="amount" type="number" min="0.01" step="0.01" placeholder="0,00" required autoFocus /></label>
-                <label>Categoría<select name="category">{categories[movementType].map((category) => <option key={category}>{category}</option>)}</select></label>
+                <label>Categoría</label>
+                <div className="category-input-group"><select name="category" value={selectedCategory} onChange={(event) => { setSelectedCategory(event.target.value); setSelectedSubcategory(""); }}>{rootCategories.map((category) => <option key={category}>{category}</option>)}</select><button type="button" className="secondary-button category-add-button" onClick={openCategoryModal}><Plus size={14} /> Nueva</button></div>
+                <label>Subcategoría <span className="optional">(opcional)</span></label>
+                <div className="category-input-group"><select name="subcategory" value={selectedSubcategory} onChange={(event) => setSelectedSubcategory(event.target.value)}><option value="">Sin subcategoría</option>{availableSubcategories.map((subcategory) => <option key={subcategory}>{subcategory}</option>)}</select><button type="button" className="secondary-button category-add-button" onClick={() => { setActionError(""); setCategoryKind("subcategory"); setModal("category"); }}><Plus size={14} /> Nueva</button></div>
                 <label>Cuenta<select name="accountId" required defaultValue=""><option value="" disabled>Elige una cuenta</option>{accounts.map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
                 <label>Fecha<input name="date" type="date" defaultValue={todayDate()} required /></label>
                 <label>Nota <span className="optional">(opcional)</span><input name="note" maxLength={100} placeholder="¿De qué se trata?" /></label>
-                {accounts.length === 0 && <p className="inline-hint">Primero necesitas <button type="button" className="inline-link" onClick={() => setModal("account")}>crear una cuenta</button>.</p>}
+                {accounts.length === 0 && <p className="inline-hint">Primero necesitas <button type="button" className="inline-link" onClick={() => openAccountModal()}>crear una cuenta</button>.</p>}
                 {actionError && <p className="error-message">{actionError}</p>}
                 <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancelar</button><button type="submit" className="primary-button" disabled={saving || accounts.length === 0}>{saving ? "Guardando..." : "Guardar movimiento"}</button></div>
               </form>
-            ) : (
+            </>}
+            {modal === "account" ? (
               <form onSubmit={submitAccount} className="modal-form">
-                <label>Nombre de la cuenta<input name="name" maxLength={40} placeholder="Ej. Cuenta principal" required autoFocus /></label>
-                <label>Tipo<select name="type"><option value="bank">Cuenta bancaria</option><option value="savings">Ahorros</option><option value="cash">Efectivo</option><option value="investment">Inversión</option></select></label>
-                <label>Saldo inicial (€)<input name="openingBalance" type="number" min="0" step="0.01" placeholder="0,00" defaultValue="0" required /></label>
+                {editingAccount ? <p className="account-edit-name">Ajustando el saldo inicial de <strong>{editingAccount.name}</strong>. Los movimientos registrados no cambiarán.</p> : <>
+                  <label>Nombre de la cuenta<input name="name" maxLength={40} placeholder="Ej. Cuenta principal" required autoFocus /></label>
+                  <label>Tipo<select name="type"><option value="bank">Cuenta bancaria</option><option value="savings">Ahorros</option><option value="cash">Efectivo</option><option value="investment">Inversión</option></select></label>
+                </>}
+                <label>Saldo inicial (€)<input name="openingBalance" type="number" min="0" step="0.01" placeholder="0,00" defaultValue={editingAccount?.openingBalance ?? 0} required autoFocus={Boolean(editingAccount)} /></label>
                 {actionError && <p className="error-message">{actionError}</p>}
-                <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancelar</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "Guardando..." : "Guardar cuenta"}</button></div>
+                <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => { setModal(null); setEditingAccount(null); }}>Cancelar</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "Guardando..." : editingAccount ? "Guardar saldo" : "Guardar cuenta"}</button></div>
               </form>
-            )}
+            ) : modal === "category" ? (
+              <form onSubmit={submitCategory} className="modal-form">
+                <label>Tipo de movimiento<select value={movementType} disabled><option value="expense">Gasto</option><option value="income">Ingreso</option><option value="investment">Inversión</option></select></label>
+                <label>Qué quieres añadir<select value={categoryKind} onChange={(event) => { setCategoryKind(event.target.value as "category" | "subcategory"); setActionError(""); }}><option value="category">Categoría</option><option value="subcategory">Subcategoría</option></select></label>
+                {categoryKind === "subcategory" && <label>Dentro de<select name="parentName" value={selectedCategory} onChange={(event) => setSelectedCategory(event.target.value)} required>{rootCategories.map((category) => <option key={category}>{category}</option>)}</select></label>}
+                <label>Nombre<input name="name" maxLength={40} placeholder={categoryKind === "category" ? "Ej. Mascotas" : "Ej. Veterinario"} required autoFocus /></label>
+                {actionError && <p className="error-message">{actionError}</p>}
+                <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal("movement")}>Volver</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "Guardando..." : "Guardar categoría"}</button></div>
+              </form>
+            ) : null}
           </section>
         </div>
       )}
@@ -455,20 +586,20 @@ function SpendingChart({ data, total }: { data: [string, number][]; total: numbe
   return <div className="chart-layout"><div className="donut-wrap"><div className="donut-chart" style={{ background: `conic-gradient(${gradient})` }}><div className="donut-hole"><small>Total gastos</small><strong>{euro.format(total)}</strong></div></div></div><div className="legend-list">{data.map(([name, value], index) => <div className="legend-row" key={name}><span className="legend-dot" style={{ backgroundColor: categoryColors[index % categoryColors.length] }} /><span className="legend-name">{name}</span><span className="legend-value">{euro.format(value)}</span><small>{total ? Math.round(value / total * 100) : 0}%</small></div>)}</div></div>;
 }
 
-function AccountRow({ account }: { account: Account & { balance: number } }) {
+function AccountRow({ account, onEdit }: { account: Account & { balance: number }; onEdit?: () => void }) {
   const Icon = account.type === "cash" ? Banknote : account.type === "investment" ? TrendingUp : account.type === "savings" ? BriefcaseBusiness : CreditCard;
-  return <div className="account-row"><span className={`account-icon account-${account.type}`}><Icon size={18} /></span><span className="account-name"><strong>{account.name}</strong><small>{account.type === "bank" ? "Cuenta bancaria" : account.type === "cash" ? "Efectivo" : account.type === "savings" ? "Ahorros" : "Inversión"}</small></span><strong className="account-balance">{euro.format(account.balance)}</strong></div>;
+  return <div className="account-row"><span className={`account-icon account-${account.type}`}><Icon size={18} /></span><span className="account-name"><strong>{account.name}</strong><small>{account.type === "bank" ? "Cuenta bancaria" : account.type === "cash" ? "Efectivo" : account.type === "savings" ? "Ahorros" : "Inversión"}</small></span><strong className="account-balance">{euro.format(account.balance)}</strong>{onEdit && <button className="icon-button account-edit-button" onClick={onEdit} aria-label={`Editar saldo inicial de ${account.name}`} title="Editar saldo inicial"><Pencil size={14} /></button>}</div>;
 }
 
-function AccountCard({ account }: { account: Account & { balance: number } }) {
-  return <article className="account-card"><AccountRow account={account} /><div className="account-card-foot"><span>Saldo inicial</span><strong>{euro.format(account.openingBalance)}</strong></div></article>;
+function AccountCard({ account, onEdit }: { account: Account & { balance: number }; onEdit: () => void }) {
+  return <article className="account-card"><AccountRow account={account} onEdit={onEdit} /><div className="account-card-foot"><span>Saldo inicial</span><strong>{euro.format(account.openingBalance)}</strong></div></article>;
 }
 
 function MovementTable({ movements, accounts, onDelete }: { movements: Movement[]; accounts: Account[]; onDelete: (movement: Movement) => void }) {
   return <div className="table-scroll"><table className="movement-table"><thead><tr><th>Movimiento</th><th>Categoría</th><th>Cuenta</th><th>Fecha</th><th className="amount-column">Importe</th><th><span className="visually-hidden">Acciones</span></th></tr></thead><tbody>
     {movements.map((item) => {
       const Icon = item.type === "income" ? ArrowDownLeft : item.type === "investment" ? TrendingUp : ShoppingBag;
-      return <tr key={item.id}><td><span className={`movement-icon movement-${item.type}`}><Icon size={17} /></span><span className="movement-description"><strong>{item.note || item.category}</strong><small>{movementNames[item.type]}</small></span></td><td><span className="category-pill">{item.category}</span></td><td>{accounts.find((account) => account.id === item.accountId)?.name || "Cuenta eliminada"}</td><td>{formatDate(item.date)}</td><td className={`amount-column amount-${item.type}`}>{item.type === "income" ? "+" : "−"}{euro.format(item.amount)}</td><td><button className="delete-button" onClick={() => onDelete(item)} aria-label={`Eliminar ${item.note || item.category}`}><X size={16} /></button></td></tr>;
+      return <tr key={item.id}><td><span className={`movement-icon movement-${item.type}`}><Icon size={17} /></span><span className="movement-description"><strong>{item.note || item.category}</strong><small>{movementNames[item.type]}</small></span></td><td><span className="category-pill">{item.subcategory ? `${item.category} · ${item.subcategory}` : item.category}</span></td><td>{accounts.find((account) => account.id === item.accountId)?.name || "Cuenta eliminada"}</td><td>{formatDate(item.date)}</td><td className={`amount-column amount-${item.type}`}>{item.type === "income" ? "+" : "−"}{euro.format(item.amount)}</td><td><button className="delete-button" onClick={() => onDelete(item)} aria-label={`Eliminar ${item.note || item.category}`}><X size={16} /></button></td></tr>;
     })}
   </tbody></table></div>;
 }
