@@ -115,14 +115,17 @@ a { color: inherit; text-decoration: none; }
 .movement-icon { display: grid; width: 30px; height: 30px; flex: 0 0 30px; place-items: center; color: #d88965; background: #fff1e9; border-radius: 8px; }
 .movement-income { color: #51a98d; background: #e9f8f2; }
 .movement-investment { color: #8075c7; background: #f0efff; }
+.movement-transfer { color: #5a91b8; background: #edf6fb; }
 .movement-description { display: grid; gap: 3px; }
 .movement-description strong { max-width: 140px; overflow: hidden; color: #424456; font-size: 10px; font-weight: 600; text-overflow: ellipsis; }
 .movement-description small { color: #a1a2ad; font-size: 9px; }
+.transfer-accounts { display: inline-flex; align-items: center; gap: 4px; color: #777987; }
 .category-pill { padding: 5px 8px; color: #777987; background: #f6f6f8; border-radius: 5px; font-size: 9px; }
 .amount-column { text-align: right !important; }
 .movement-table td.amount-column { color: #ce8667; font-weight: 700; }
 .movement-table td.amount-income { color: #4caa8a; }
 .movement-table td.amount-investment { color: #7979bf; }
+.movement-table td.amount-transfer { color: #5a91b8; }
 .delete-button { display: grid; width: 25px; height: 25px; place-items: center; color: #b7b7c1; background: transparent; border: 0; border-radius: 6px; opacity: 0; }
 .movement-table tr:hover .delete-button, .delete-button:focus-visible { opacity: 1; }
 .delete-button:hover { color: #cc6c6c; background: #fff0f0; }

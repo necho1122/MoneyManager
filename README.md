@@ -10,7 +10,7 @@ Aplicación personal para revisar ingresos, gastos, cuentas e inversiones desde 
 4. Crea la base de datos de Firestore e instala las reglas de `firestore.rules`.
 5. Ejecuta `npm install` y `npm run dev`.
 
-Las cuentas, categorías personalizadas y movimientos se guardan bajo `users/{uid}`. Las reglas impiden que otros usuarios lean o escriban esos documentos. Puedes ajustar el saldo inicial de una cuenta sin alterar los movimientos, y crear categorías y subcategorías al registrar una operación.
+Las cuentas, categorías personalizadas y movimientos se guardan bajo `users/{uid}`. Las reglas impiden que otros usuarios lean o escriban esos documentos. Puedes ajustar el saldo inicial de una cuenta sin alterar los movimientos, crear categorías y subcategorías al registrar una operación, y registrar traspasos entre cuentas propias. Un traspaso resta el importe de la cuenta de origen y lo suma a la cuenta de destino sin contarlo como ingreso o gasto.
 
 ## Despliegue en Vercel
 

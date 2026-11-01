@@ -40,7 +40,8 @@ import {
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { auth, db, googleProvider, isFirebaseConfigured } from "@/lib/firebase";
 
-type MovementType = "income" | "expense" | "investment";
+type MovementType = "income" | "expense" | "investment" | "transfer";
+type CategorizedMovementType = Exclude<MovementType, "transfer">;
 type Account = {
   id: string;
   name: string;
@@ -50,21 +51,22 @@ type Account = {
 type Movement = {
   id: string;
   amount: number;
-  category: string;
+  category?: string;
   subcategory?: string;
   date: string;
   note: string;
   accountId: string;
+  transferToAccountId?: string;
   type: MovementType;
 };
 type UserCategory = {
   id: string;
-  type: MovementType;
+  type: CategorizedMovementType;
   name: string;
   parentName: string | null;
 };
 
-const categories: Record<MovementType, string[]> = {
+const categories: Record<CategorizedMovementType, string[]> = {
   expense: ["Alimentación", "Vivienda", "Transporte", "Ocio", "Salud", "Compras", "Servicios", "Otros"],
   income: ["Sueldo", "Negocio", "Regalo", "Otros ingresos"],
   investment: ["Acciones", "Fondos", "Criptomonedas", "Otros"],
@@ -74,6 +76,7 @@ const movementNames: Record<MovementType, string> = {
   income: "Ingreso",
   expense: "Gasto",
   investment: "Inversión",
+  transfer: "Traspaso",
 };
 const euro = new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" });
 
@@ -172,6 +175,8 @@ export default function Home() {
   const [movementType, setMovementType] = useState<MovementType>("expense");
   const [selectedCategory, setSelectedCategory] = useState(categories.expense[0]);
   const [selectedSubcategory, setSelectedSubcategory] = useState("");
+  const [selectedAccountId, setSelectedAccountId] = useState("");
+  const [selectedTransferToId, setSelectedTransferToId] = useState("");
   const [categoryKind, setCategoryKind] = useState<"category" | "subcategory">("category");
   const [mobileNav, setMobileNav] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -236,17 +241,18 @@ export default function Home() {
   }, [user]);
 
   const rootCategories = useMemo(() => {
+    const categoryType: CategorizedMovementType = movementType === "transfer" ? "expense" : movementType;
     const customNames = userCategories
-      .filter((item) => item.type === movementType && item.parentName === null)
+      .filter((item) => item.type === categoryType && item.parentName === null)
       .map((item) => item.name);
-    return [...categories[movementType], ...customNames.filter(
-      (name) => !categories[movementType].some((item) => item.toLocaleLowerCase() === name.toLocaleLowerCase()),
+    return [...categories[categoryType], ...customNames.filter(
+      (name) => !categories[categoryType].some((item) => item.toLocaleLowerCase() === name.toLocaleLowerCase()),
     )];
   }, [movementType, userCategories]);
 
   const availableSubcategories = useMemo(
     () => userCategories
-      .filter((item) => item.type === movementType && item.parentName === selectedCategory)
+      .filter((item) => item.type === (movementType === "transfer" ? "expense" : movementType) && item.parentName === selectedCategory)
       .map((item) => item.name),
     [movementType, selectedCategory, userCategories],
   );
@@ -264,14 +270,22 @@ export default function Home() {
       ...account,
       balance: account.openingBalance + allMovements
         .filter((item) => item.accountId === account.id)
-        .reduce((sum, item) => sum + (item.type === "income" ? item.amount : -item.amount), 0),
+        .reduce((sum, item) => {
+          if (item.type === "transfer") {
+            if (item.accountId === account.id) return sum - item.amount;
+            if (item.transferToAccountId === account.id) return sum + item.amount;
+            return sum;
+          }
+          return sum + (item.type === "income" ? item.amount : -item.amount);
+        }, 0),
     }));
     return { income, expenses, investments, balance: accountBalances.reduce((sum, item) => sum + item.balance, 0), accountBalances };
   }, [accounts, movements, allMovements]);
 
   const expensesByCategory = useMemo(() => {
     const grouped = movements.filter((item) => item.type === "expense").reduce<Record<string, number>>((acc, item) => {
-      const label = item.subcategory ? `${item.category} · ${item.subcategory}` : item.category;
+      const category = item.category || "Otros";
+      const label = item.subcategory ? `${category} · ${item.subcategory}` : category;
       acc[label] = (acc[label] || 0) + item.amount;
       return acc;
     }, {});
@@ -300,19 +314,37 @@ export default function Home() {
       setActionError("Introduce un importe mayor que cero.");
       return;
     }
+    if (!accounts.some((account) => account.id === selectedAccountId)) {
+      setActionError("Elige la cuenta de origen.");
+      return;
+    }
+    if (movementType === "transfer" && (
+      !accounts.some((account) => account.id === selectedTransferToId)
+      || selectedTransferToId === selectedAccountId
+    )) {
+      setActionError("Elige dos cuentas distintas para realizar el traspaso.");
+      return;
+    }
+    const date = formData.get("date");
+    if (typeof date !== "string" || !date) {
+      setActionError("Indica una fecha válida para el movimiento.");
+      return;
+    }
     setSaving(true);
     setActionError("");
     try {
-      await addDoc(collection(db, "users", user.uid, "movements"), {
-        type: formData.get("type"),
+      const movement: Omit<Movement, "id"> & { createdAt: string } = {
+        type: movementType,
         amount,
-        category: formData.get("category"),
-        subcategory: formData.get("subcategory") || "",
-        accountId: formData.get("accountId"),
-        date: formData.get("date"),
+        category: movementType === "transfer" ? "" : String(formData.get("category") || ""),
+        subcategory: movementType === "transfer" ? "" : String(formData.get("subcategory") || ""),
+        accountId: selectedAccountId,
+        date,
         note: String(formData.get("note") || "").trim(),
+        ...(movementType === "transfer" ? { transferToAccountId: selectedTransferToId } : {}),
         createdAt: new Date().toISOString(),
-      });
+      };
+      await addDoc(collection(db, "users", user.uid, "movements"), movement);
       setModal(null);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "No se pudo guardar el movimiento.");
@@ -360,6 +392,10 @@ export default function Home() {
   const submitCategory = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!db || !user) return;
+    if (movementType === "transfer") {
+      setActionError("Los traspasos no usan categorías.");
+      return;
+    }
     const formData = new FormData(event.currentTarget);
     const name = String(formData.get("name") || "").trim();
     const parentName = categoryKind === "subcategory" ? String(formData.get("parentName") || "") : null;
@@ -406,6 +442,8 @@ export default function Home() {
     setMovementType("expense");
     setSelectedCategory(categories.expense[0]);
     setSelectedSubcategory("");
+    setSelectedAccountId("");
+    setSelectedTransferToId("");
     setModal("movement");
   };
 
@@ -528,21 +566,27 @@ export default function Home() {
       {modal && (
         <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setModal(null); }}>
           <section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-            <div className="modal-heading"><div><span className="eyebrow">{modal === "movement" ? "ANOTA UN MOVIMIENTO" : modal === "category" ? "PERSONALIZA TUS CATEGORÍAS" : "ORGANIZA TU DINERO"}</span><h2 id="modal-title">{modal === "movement" ? "Nuevo movimiento" : modal === "category" ? categoryKind === "category" ? "Nueva categoría" : "Nueva subcategoría" : editingAccount ? "Editar saldo inicial" : "Nueva cuenta"}</h2></div><button className="icon-button" onClick={() => setModal(null)} aria-label="Cerrar"><X size={19} /></button></div>
+            <div className="modal-heading"><div><span className="eyebrow">{modal === "movement" ? "ANOTA UN MOVIMIENTO" : modal === "category" ? "PERSONALIZA TUS CATEGORÍAS" : "ORGANIZA TU DINERO"}</span><h2 id="modal-title">{modal === "movement" ? movementType === "transfer" ? "Nuevo traspaso" : "Nuevo movimiento" : modal === "category" ? categoryKind === "category" ? "Nueva categoría" : "Nueva subcategoría" : editingAccount ? "Editar saldo inicial" : "Nueva cuenta"}</h2></div><button className="icon-button" onClick={() => setModal(null)} aria-label="Cerrar"><X size={19} /></button></div>
             {(modal === "movement" || modal === "category") && <>
               <form onSubmit={submitMovement} className={`modal-form${modal === "category" ? " modal-form-hidden" : ""}`}>
-                <label>Tipo de movimiento<select name="type" value={movementType} onChange={(event) => { const type = event.target.value as MovementType; setMovementType(type); setSelectedCategory(categories[type][0]); setSelectedSubcategory(""); }}><option value="expense">Gasto</option><option value="income">Ingreso</option><option value="investment">Inversión</option></select></label>
+                <label>Tipo de movimiento<select name="type" value={movementType} onChange={(event) => { const type = event.target.value as MovementType; setMovementType(type); if (type !== "transfer") setSelectedCategory(categories[type][0]); setSelectedSubcategory(""); setSelectedAccountId(""); setSelectedTransferToId(""); }}><option value="expense">Gasto</option><option value="income">Ingreso</option><option value="investment">Inversión</option><option value="transfer">Traspaso entre mis cuentas</option></select></label>
                 <label>Importe (€)<input name="amount" type="number" min="0.01" step="0.01" placeholder="0,00" required autoFocus /></label>
-                <label>Categoría</label>
-                <div className="category-input-group"><select name="category" value={selectedCategory} onChange={(event) => { setSelectedCategory(event.target.value); setSelectedSubcategory(""); }}>{rootCategories.map((category) => <option key={category}>{category}</option>)}</select><button type="button" className="secondary-button category-add-button" onClick={openCategoryModal}><Plus size={14} /> Nueva</button></div>
-                <label>Subcategoría <span className="optional">(opcional)</span></label>
-                <div className="category-input-group"><select name="subcategory" value={selectedSubcategory} onChange={(event) => setSelectedSubcategory(event.target.value)}><option value="">Sin subcategoría</option>{availableSubcategories.map((subcategory) => <option key={subcategory}>{subcategory}</option>)}</select><button type="button" className="secondary-button category-add-button" onClick={() => { setActionError(""); setCategoryKind("subcategory"); setModal("category"); }}><Plus size={14} /> Nueva</button></div>
-                <label>Cuenta<select name="accountId" required defaultValue=""><option value="" disabled>Elige una cuenta</option>{accounts.map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
+                {movementType === "transfer" ? <>
+                  <label>Cuenta de origen<select name="accountId" value={selectedAccountId} onChange={(event) => { const sourceId = event.target.value; setSelectedAccountId(sourceId); if (sourceId === selectedTransferToId) setSelectedTransferToId(""); }} required><option value="" disabled>Desde qué cuenta</option>{accounts.map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
+                  <label>Cuenta de destino<select name="transferToAccountId" value={selectedTransferToId} onChange={(event) => setSelectedTransferToId(event.target.value)} required disabled={!selectedAccountId || accounts.length < 2}><option value="" disabled>Hacia qué cuenta</option>{accounts.filter((account) => account.id !== selectedAccountId).map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
+                  {accounts.length < 2 && <p className="inline-hint">Añade otra cuenta para poder hacer un traspaso entre tus cuentas.</p>}
+                </> : <>
+                  <label>Categoría</label>
+                  <div className="category-input-group"><select name="category" value={selectedCategory} onChange={(event) => { setSelectedCategory(event.target.value); setSelectedSubcategory(""); }}>{rootCategories.map((category) => <option key={category}>{category}</option>)}</select><button type="button" className="secondary-button category-add-button" onClick={openCategoryModal}><Plus size={14} /> Nueva</button></div>
+                  <label>Subcategoría <span className="optional">(opcional)</span></label>
+                  <div className="category-input-group"><select name="subcategory" value={selectedSubcategory} onChange={(event) => setSelectedSubcategory(event.target.value)}><option value="">Sin subcategoría</option>{availableSubcategories.map((subcategory) => <option key={subcategory}>{subcategory}</option>)}</select><button type="button" className="secondary-button category-add-button" onClick={() => { setActionError(""); setCategoryKind("subcategory"); setModal("category"); }}><Plus size={14} /> Nueva</button></div>
+                  <label>Cuenta<select name="accountId" value={selectedAccountId} onChange={(event) => setSelectedAccountId(event.target.value)} required><option value="" disabled>Elige una cuenta</option>{accounts.map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
+                </>}
                 <label>Fecha<input name="date" type="date" defaultValue={todayDate()} required /></label>
-                <label>Nota <span className="optional">(opcional)</span><input name="note" maxLength={100} placeholder="¿De qué se trata?" /></label>
-                {accounts.length === 0 && <p className="inline-hint">Primero necesitas <button type="button" className="inline-link" onClick={() => openAccountModal()}>crear una cuenta</button>.</p>}
+                <label>{movementType === "transfer" ? "Descripción" : "Nota"} <span className="optional">(opcional)</span><input name="note" maxLength={100} placeholder={movementType === "transfer" ? "Ej. Pasar dinero a ahorros" : "¿De qué se trata?"} /></label>
+                {accounts.length === 0 && movementType !== "transfer" && <p className="inline-hint">Primero necesitas <button type="button" className="inline-link" onClick={() => openAccountModal()}>crear una cuenta</button>.</p>}
                 {actionError && <p className="error-message">{actionError}</p>}
-                <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancelar</button><button type="submit" className="primary-button" disabled={saving || accounts.length === 0}>{saving ? "Guardando..." : "Guardar movimiento"}</button></div>
+                <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancelar</button><button type="submit" className="primary-button" disabled={saving || accounts.length === 0 || (movementType === "transfer" && accounts.length < 2)}>{saving ? "Guardando..." : movementType === "transfer" ? "Guardar traspaso" : "Guardar movimiento"}</button></div>
               </form>
             </>}
             {modal === "account" ? (
@@ -598,8 +642,16 @@ function AccountCard({ account, onEdit }: { account: Account & { balance: number
 function MovementTable({ movements, accounts, onDelete }: { movements: Movement[]; accounts: Account[]; onDelete: (movement: Movement) => void }) {
   return <div className="table-scroll"><table className="movement-table"><thead><tr><th>Movimiento</th><th>Categoría</th><th>Cuenta</th><th>Fecha</th><th className="amount-column">Importe</th><th><span className="visually-hidden">Acciones</span></th></tr></thead><tbody>
     {movements.map((item) => {
-      const Icon = item.type === "income" ? ArrowDownLeft : item.type === "investment" ? TrendingUp : ShoppingBag;
-      return <tr key={item.id}><td><span className={`movement-icon movement-${item.type}`}><Icon size={17} /></span><span className="movement-description"><strong>{item.note || item.category}</strong><small>{movementNames[item.type]}</small></span></td><td><span className="category-pill">{item.subcategory ? `${item.category} · ${item.subcategory}` : item.category}</span></td><td>{accounts.find((account) => account.id === item.accountId)?.name || "Cuenta eliminada"}</td><td>{formatDate(item.date)}</td><td className={`amount-column amount-${item.type}`}>{item.type === "income" ? "+" : "−"}{euro.format(item.amount)}</td><td><button className="delete-button" onClick={() => onDelete(item)} aria-label={`Eliminar ${item.note || item.category}`}><X size={16} /></button></td></tr>;
+      const Icon = item.type === "income" ? ArrowDownLeft : item.type === "investment" ? TrendingUp : item.type === "transfer" ? ArrowDownRight : ShoppingBag;
+      const sourceAccount = accounts.find((account) => account.id === item.accountId)?.name || "Cuenta eliminada";
+      const targetAccount = item.transferToAccountId
+        ? accounts.find((account) => account.id === item.transferToAccountId)?.name || "Cuenta eliminada"
+        : "";
+      const categoryName = item.type === "transfer"
+        ? "Traspaso entre cuentas"
+        : item.subcategory ? `${item.category} · ${item.subcategory}` : item.category || "Otros";
+      const amountPrefix = item.type === "income" ? "+" : item.type === "transfer" ? "" : "−";
+      return <tr key={item.id}><td><span className={`movement-icon movement-${item.type}`}><Icon size={17} /></span><span className="movement-description"><strong>{item.note || (item.type === "transfer" ? `${sourceAccount} → ${targetAccount}` : item.category || movementNames[item.type])}</strong><small>{movementNames[item.type]}</small></span></td><td><span className="category-pill">{categoryName}</span></td><td>{item.type === "transfer" ? <span className="transfer-accounts">{sourceAccount} <ArrowRight size={12} /> {targetAccount}</span> : sourceAccount}</td><td>{formatDate(item.date)}</td><td className={`amount-column amount-${item.type}`}>{amountPrefix}{euro.format(item.amount)}</td><td><button className="delete-button" onClick={() => onDelete(item)} aria-label={`Eliminar ${item.note || categoryName}`}><X size={16} /></button></td></tr>;
     })}
   </tbody></table></div>;
 }
