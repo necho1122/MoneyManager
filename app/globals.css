@@ -189,6 +189,7 @@ a { color: inherit; text-decoration: none; }
 .secondary-button { min-height: 39px; padding: 0 14px; color: #737584; background: #fff; border: 1px solid #e7e6ed; border-radius: 8px; font-size: 11px; font-weight: 600; }
 .secondary-button:hover { background: #f8f8fa; }
 .inline-hint { margin: 0; color: #a84c4c; font-size: 10px; }
+.accounting-hint { margin: 0; color: #9294a1; font-size: 10px; line-height: 1.5; }
 .inline-link { padding: 0; color: #7272d1; background: transparent; border: 0; font-size: inherit; text-decoration: underline; }
 .nav-scrim { display: none; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }

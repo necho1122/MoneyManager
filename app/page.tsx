@@ -269,9 +269,9 @@ export default function Home() {
     const accountBalances = accounts.map((account) => ({
       ...account,
       balance: account.openingBalance + allMovements
-        .filter((item) => item.accountId === account.id)
+        .filter((item) => item.accountId === account.id || item.transferToAccountId === account.id)
         .reduce((sum, item) => {
-          if (item.type === "transfer") {
+          if (item.type === "transfer" || (item.type === "investment" && item.transferToAccountId)) {
             if (item.accountId === account.id) return sum - item.amount;
             if (item.transferToAccountId === account.id) return sum + item.amount;
             return sum;
@@ -318,11 +318,17 @@ export default function Home() {
       setActionError("Elige la cuenta de origen.");
       return;
     }
-    if (movementType === "transfer" && (
-      !accounts.some((account) => account.id === selectedTransferToId)
+    const destinationAccount = accounts.find((account) => account.id === selectedTransferToId);
+    if (movementType === "transfer" && (!destinationAccount || selectedTransferToId === selectedAccountId)) {
+      setActionError("Elige dos cuentas distintas para realizar el traspaso.");
+      return;
+    }
+    if (movementType === "investment" && (
+      !destinationAccount
+      || destinationAccount.type !== "investment"
       || selectedTransferToId === selectedAccountId
     )) {
-      setActionError("Elige dos cuentas distintas para realizar el traspaso.");
+      setActionError("Elige una cuenta de inversión distinta de la cuenta de origen.");
       return;
     }
     const date = formData.get("date");
@@ -341,7 +347,7 @@ export default function Home() {
         accountId: selectedAccountId,
         date,
         note: String(formData.get("note") || "").trim(),
-        ...(movementType === "transfer" ? { transferToAccountId: selectedTransferToId } : {}),
+        ...(["transfer", "investment"].includes(movementType) ? { transferToAccountId: selectedTransferToId } : {}),
         createdAt: new Date().toISOString(),
       };
       await addDoc(collection(db, "users", user.uid, "movements"), movement);
@@ -547,7 +553,7 @@ export default function Home() {
             )}
             {activePage === "movements" && (
               <section className="panel page-panel">
-                <div className="panel-heading"><div><h3>Todos tus movimientos</h3><p>Ingresos, gastos e inversiones de {formatMonth(month)}</p></div><span className="subtle-chip">{movements.length} registros</span></div>
+                <div className="panel-heading"><div><h3>Todos tus movimientos</h3><p>Ingresos, gastos, inversiones y traspasos de {formatMonth(month)}</p></div><span className="subtle-chip">{movements.length} registros</span></div>
                 {movements.length ? <MovementTable movements={movements} accounts={accounts} onDelete={removeMovement} /> : <EmptyState title="Este mes está en blanco" text="Añade un movimiento para empezar a llevar el control." action={openMovementModal} />}
               </section>
             )}
@@ -571,10 +577,12 @@ export default function Home() {
               <form onSubmit={submitMovement} className={`modal-form${modal === "category" ? " modal-form-hidden" : ""}`}>
                 <label>Tipo de movimiento<select name="type" value={movementType} onChange={(event) => { const type = event.target.value as MovementType; setMovementType(type); if (type !== "transfer") setSelectedCategory(categories[type][0]); setSelectedSubcategory(""); setSelectedAccountId(""); setSelectedTransferToId(""); }}><option value="expense">Gasto</option><option value="income">Ingreso</option><option value="investment">Inversión</option><option value="transfer">Traspaso entre mis cuentas</option></select></label>
                 <label>Importe (€)<input name="amount" type="number" min="0.01" step="0.01" placeholder="0,00" required autoFocus /></label>
-                {movementType === "transfer" ? <>
+                {movementType === "transfer" || movementType === "investment" ? <>
                   <label>Cuenta de origen<select name="accountId" value={selectedAccountId} onChange={(event) => { const sourceId = event.target.value; setSelectedAccountId(sourceId); if (sourceId === selectedTransferToId) setSelectedTransferToId(""); }} required><option value="" disabled>Desde qué cuenta</option>{accounts.map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
-                  <label>Cuenta de destino<select name="transferToAccountId" value={selectedTransferToId} onChange={(event) => setSelectedTransferToId(event.target.value)} required disabled={!selectedAccountId || accounts.length < 2}><option value="" disabled>Hacia qué cuenta</option>{accounts.filter((account) => account.id !== selectedAccountId).map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
-                  {accounts.length < 2 && <p className="inline-hint">Añade otra cuenta para poder hacer un traspaso entre tus cuentas.</p>}
+                  <label>{movementType === "investment" ? "Cuenta de inversión" : "Cuenta de destino"}<select name="transferToAccountId" value={selectedTransferToId} onChange={(event) => setSelectedTransferToId(event.target.value)} required disabled={!selectedAccountId || (movementType === "investment" ? !accounts.some((account) => account.type === "investment" && account.id !== selectedAccountId) : accounts.length < 2)}><option value="" disabled>{movementType === "investment" ? "Elige la cuenta de inversión" : "Hacia qué cuenta"}</option>{accounts.filter((account) => account.id !== selectedAccountId && (movementType !== "investment" || account.type === "investment")).map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
+                  {movementType === "investment" && !accounts.some((account) => account.type === "investment" && account.id !== selectedAccountId) && <p className="inline-hint">Necesitas una cuenta de tipo Inversión. <button type="button" className="inline-link" onClick={() => { setActivePage("accounts"); setModal(null); }}>Añadir cuenta</button></p>}
+                  {movementType === "investment" && <p className="accounting-hint">El importe se resta del origen y se suma a la cuenta de inversión; el saldo total no cambia.</p>}
+                  {movementType === "transfer" && accounts.length < 2 && <p className="inline-hint">Añade otra cuenta para poder hacer un traspaso entre tus cuentas.</p>}
                 </> : <>
                   <label>Categoría</label>
                   <div className="category-input-group"><select name="category" value={selectedCategory} onChange={(event) => { setSelectedCategory(event.target.value); setSelectedSubcategory(""); }}>{rootCategories.map((category) => <option key={category}>{category}</option>)}</select><button type="button" className="secondary-button category-add-button" onClick={openCategoryModal}><Plus size={14} /> Nueva</button></div>
@@ -586,7 +594,7 @@ export default function Home() {
                 <label>{movementType === "transfer" ? "Descripción" : "Nota"} <span className="optional">(opcional)</span><input name="note" maxLength={100} placeholder={movementType === "transfer" ? "Ej. Pasar dinero a ahorros" : "¿De qué se trata?"} /></label>
                 {accounts.length === 0 && movementType !== "transfer" && <p className="inline-hint">Primero necesitas <button type="button" className="inline-link" onClick={() => openAccountModal()}>crear una cuenta</button>.</p>}
                 {actionError && <p className="error-message">{actionError}</p>}
-                <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancelar</button><button type="submit" className="primary-button" disabled={saving || accounts.length === 0 || (movementType === "transfer" && accounts.length < 2)}>{saving ? "Guardando..." : movementType === "transfer" ? "Guardar traspaso" : "Guardar movimiento"}</button></div>
+                <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal(null)}>Cancelar</button><button type="submit" className="primary-button" disabled={saving || accounts.length === 0 || (movementType === "transfer" && accounts.length < 2) || (movementType === "investment" && !accounts.some((account) => account.type === "investment" && account.id !== selectedAccountId))}>{saving ? "Guardando..." : movementType === "transfer" ? "Guardar traspaso" : movementType === "investment" ? "Registrar inversión" : "Guardar movimiento"}</button></div>
               </form>
             </>}
             {modal === "account" ? (
@@ -647,11 +655,12 @@ function MovementTable({ movements, accounts, onDelete }: { movements: Movement[
       const targetAccount = item.transferToAccountId
         ? accounts.find((account) => account.id === item.transferToAccountId)?.name || "Cuenta eliminada"
         : "";
+      const isPairedMovement = item.type === "transfer" || (item.type === "investment" && Boolean(item.transferToAccountId));
       const categoryName = item.type === "transfer"
         ? "Traspaso entre cuentas"
         : item.subcategory ? `${item.category} · ${item.subcategory}` : item.category || "Otros";
       const amountPrefix = item.type === "income" ? "+" : item.type === "transfer" ? "" : "−";
-      return <tr key={item.id}><td><span className={`movement-icon movement-${item.type}`}><Icon size={17} /></span><span className="movement-description"><strong>{item.note || (item.type === "transfer" ? `${sourceAccount} → ${targetAccount}` : item.category || movementNames[item.type])}</strong><small>{movementNames[item.type]}</small></span></td><td><span className="category-pill">{categoryName}</span></td><td>{item.type === "transfer" ? <span className="transfer-accounts">{sourceAccount} <ArrowRight size={12} /> {targetAccount}</span> : sourceAccount}</td><td>{formatDate(item.date)}</td><td className={`amount-column amount-${item.type}`}>{amountPrefix}{euro.format(item.amount)}</td><td><button className="delete-button" onClick={() => onDelete(item)} aria-label={`Eliminar ${item.note || categoryName}`}><X size={16} /></button></td></tr>;
+      return <tr key={item.id}><td><span className={`movement-icon movement-${item.type}`}><Icon size={17} /></span><span className="movement-description"><strong>{item.note || (isPairedMovement ? `${sourceAccount} → ${targetAccount}` : item.category || movementNames[item.type])}</strong><small>{movementNames[item.type]}</small></span></td><td><span className="category-pill">{categoryName}</span></td><td>{isPairedMovement ? <span className="transfer-accounts">{sourceAccount} <ArrowRight size={12} /> {targetAccount}</span> : sourceAccount}</td><td>{formatDate(item.date)}</td><td className={`amount-column amount-${item.type}`}>{amountPrefix}{euro.format(item.amount)}</td><td><button className="delete-button" onClick={() => onDelete(item)} aria-label={`Eliminar ${item.note || categoryName}`}><X size={16} /></button></td></tr>;
     })}
   </tbody></table></div>;
 }
