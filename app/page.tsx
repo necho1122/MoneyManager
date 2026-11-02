@@ -24,6 +24,7 @@ import {
   ArrowUpRight,
   Banknote,
   BriefcaseBusiness,
+  ChartNoAxesCombined,
   Check,
   CircleHelp,
   CreditCard,
@@ -38,6 +39,7 @@ import {
   X,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { auth, db, googleProvider, isFirebaseConfigured } from "@/lib/firebase";
 
 type MovementType = "income" | "expense" | "investment" | "transfer";
@@ -495,6 +497,9 @@ export default function Home() {
               <Icon size={19} strokeWidth={1.9} /><span>{label}</span>
             </button>
           ))}
+          <Link className="nav-item" href="/frascos" onClick={() => setMobileNav(false)}>
+            <ChartNoAxesCombined size={19} strokeWidth={1.9} /><span>Método de los 6 frascos</span>
+          </Link>
         </nav>
         <div className="sidebar-bottom">
           <div className="sidebar-tip"><span className="tip-icon"><TrendingUp size={17} /></span><strong>Poco a poco</strong><p>Pequeños hábitos hacen una gran diferencia.</p></div>
