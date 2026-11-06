@@ -39,6 +39,7 @@ import {
   X,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { auth, db, googleProvider, isFirebaseConfigured } from "@/lib/firebase";
 
@@ -202,7 +203,9 @@ export default function Home() {
     const viewport = window.visualViewport;
     const updateViewport = () => {
       root.style.setProperty("--modal-viewport-height", `${viewport?.height ?? window.innerHeight}px`);
+      root.style.setProperty("--modal-viewport-width", `${viewport?.width ?? window.innerWidth}px`);
       root.style.setProperty("--modal-viewport-offset-top", `${viewport?.offsetTop ?? 0}px`);
+      root.style.setProperty("--modal-viewport-offset-left", `${viewport?.offsetLeft ?? 0}px`);
     };
 
     document.body.style.overflow = "hidden";
@@ -213,7 +216,9 @@ export default function Home() {
     return () => {
       document.body.style.overflow = bodyOverflow;
       root.style.removeProperty("--modal-viewport-height");
+      root.style.removeProperty("--modal-viewport-width");
       root.style.removeProperty("--modal-viewport-offset-top");
+      root.style.removeProperty("--modal-viewport-offset-left");
       viewport?.removeEventListener("resize", updateViewport);
       viewport?.removeEventListener("scroll", updateViewport);
       window.removeEventListener("resize", updateViewport);
@@ -599,7 +604,7 @@ export default function Home() {
       </main>
 
       {mobileNav && <button className="nav-scrim" onClick={() => setMobileNav(false)} aria-label="Cerrar menú" />}
-      {modal && (
+      {modal && createPortal(
         <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setModal(null); }}>
           <section className={`modal modal-${modal}`} role="dialog" aria-modal="true" aria-labelledby="modal-title">
             <div className="modal-heading"><div><span className="eyebrow">{modal === "movement" ? "ANOTA UN MOVIMIENTO" : modal === "category" ? "PERSONALIZA TUS CATEGORÍAS" : "ORGANIZA TU DINERO"}</span><h2 id="modal-title">{modal === "movement" ? movementType === "transfer" ? "Nuevo traspaso" : "Nuevo movimiento" : modal === "category" ? categoryKind === "category" ? "Nueva categoría" : "Nueva subcategoría" : editingAccount ? "Editar saldo inicial" : "Nueva cuenta"}</h2></div><button className="icon-button" onClick={() => setModal(null)} aria-label="Cerrar"><X size={19} /></button></div>
@@ -648,7 +653,8 @@ export default function Home() {
               </form>
             ) : null}
           </section>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
