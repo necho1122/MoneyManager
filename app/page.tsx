@@ -196,6 +196,31 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (!modal) return;
+    const root = document.documentElement;
+    const bodyOverflow = document.body.style.overflow;
+    const viewport = window.visualViewport;
+    const updateViewport = () => {
+      root.style.setProperty("--modal-viewport-height", `${viewport?.height ?? window.innerHeight}px`);
+      root.style.setProperty("--modal-viewport-offset-top", `${viewport?.offsetTop ?? 0}px`);
+    };
+
+    document.body.style.overflow = "hidden";
+    updateViewport();
+    viewport?.addEventListener("resize", updateViewport);
+    viewport?.addEventListener("scroll", updateViewport);
+    window.addEventListener("resize", updateViewport);
+    return () => {
+      document.body.style.overflow = bodyOverflow;
+      root.style.removeProperty("--modal-viewport-height");
+      root.style.removeProperty("--modal-viewport-offset-top");
+      viewport?.removeEventListener("resize", updateViewport);
+      viewport?.removeEventListener("scroll", updateViewport);
+      window.removeEventListener("resize", updateViewport);
+    };
+  }, [modal]);
+
+  useEffect(() => {
     if (!user || !db) {
       setAccounts([]);
       setUserCategories([]);
@@ -576,12 +601,12 @@ export default function Home() {
       {mobileNav && <button className="nav-scrim" onClick={() => setMobileNav(false)} aria-label="Cerrar menú" />}
       {modal && (
         <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setModal(null); }}>
-          <section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+          <section className={`modal modal-${modal}`} role="dialog" aria-modal="true" aria-labelledby="modal-title">
             <div className="modal-heading"><div><span className="eyebrow">{modal === "movement" ? "ANOTA UN MOVIMIENTO" : modal === "category" ? "PERSONALIZA TUS CATEGORÍAS" : "ORGANIZA TU DINERO"}</span><h2 id="modal-title">{modal === "movement" ? movementType === "transfer" ? "Nuevo traspaso" : "Nuevo movimiento" : modal === "category" ? categoryKind === "category" ? "Nueva categoría" : "Nueva subcategoría" : editingAccount ? "Editar saldo inicial" : "Nueva cuenta"}</h2></div><button className="icon-button" onClick={() => setModal(null)} aria-label="Cerrar"><X size={19} /></button></div>
             {(modal === "movement" || modal === "category") && <>
               <form onSubmit={submitMovement} className={`modal-form${modal === "category" ? " modal-form-hidden" : ""}`}>
                 <label>Tipo de movimiento<select name="type" value={movementType} onChange={(event) => { const type = event.target.value as MovementType; setMovementType(type); if (type !== "transfer") setSelectedCategory(categories[type][0]); setSelectedSubcategory(""); setSelectedAccountId(""); setSelectedTransferToId(""); }}><option value="expense">Gasto</option><option value="income">Ingreso</option><option value="investment">Inversión</option><option value="transfer">Traspaso entre mis cuentas</option></select></label>
-                <label>Importe (€)<input name="amount" type="number" min="0.01" step="0.01" placeholder="0,00" required autoFocus /></label>
+                <label>Importe (€)<input name="amount" type="number" inputMode="decimal" min="0.01" step="0.01" placeholder="0,00" required /></label>
                 {movementType === "transfer" || movementType === "investment" ? <>
                   <label>Cuenta de origen<select name="accountId" value={selectedAccountId} onChange={(event) => { const sourceId = event.target.value; setSelectedAccountId(sourceId); if (sourceId === selectedTransferToId) setSelectedTransferToId(""); }} required><option value="" disabled>Desde qué cuenta</option>{accounts.map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
                   <label>{movementType === "investment" ? "Cuenta de inversión" : "Cuenta de destino"}<select name="transferToAccountId" value={selectedTransferToId} onChange={(event) => setSelectedTransferToId(event.target.value)} required disabled={!selectedAccountId || (movementType === "investment" ? !accounts.some((account) => account.type === "investment" && account.id !== selectedAccountId) : accounts.length < 2)}><option value="" disabled>{movementType === "investment" ? "Elige la cuenta de inversión" : "Hacia qué cuenta"}</option>{accounts.filter((account) => account.id !== selectedAccountId && (movementType !== "investment" || account.type === "investment")).map((account) => <option value={account.id} key={account.id}>{account.name}</option>)}</select></label>
@@ -605,10 +630,10 @@ export default function Home() {
             {modal === "account" ? (
               <form onSubmit={submitAccount} className="modal-form">
                 {editingAccount ? <p className="account-edit-name">Ajustando el saldo inicial de <strong>{editingAccount.name}</strong>. Los movimientos registrados no cambiarán.</p> : <>
-                  <label>Nombre de la cuenta<input name="name" maxLength={40} placeholder="Ej. Cuenta principal" required autoFocus /></label>
+                  <label>Nombre de la cuenta<input name="name" maxLength={40} placeholder="Ej. Cuenta principal" required /></label>
                   <label>Tipo<select name="type"><option value="bank">Cuenta bancaria</option><option value="savings">Ahorros</option><option value="cash">Efectivo</option><option value="investment">Inversión</option></select></label>
                 </>}
-                <label>Saldo inicial (€)<input name="openingBalance" type="number" min="0" step="0.01" placeholder="0,00" defaultValue={editingAccount?.openingBalance ?? 0} required autoFocus={Boolean(editingAccount)} /></label>
+                <label>Saldo inicial (€)<input name="openingBalance" type="number" inputMode="decimal" min="0" step="0.01" placeholder="0,00" defaultValue={editingAccount?.openingBalance ?? 0} required /></label>
                 {actionError && <p className="error-message">{actionError}</p>}
                 <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => { setModal(null); setEditingAccount(null); }}>Cancelar</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "Guardando..." : editingAccount ? "Guardar saldo" : "Guardar cuenta"}</button></div>
               </form>
@@ -617,7 +642,7 @@ export default function Home() {
                 <label>Tipo de movimiento<select value={movementType} disabled><option value="expense">Gasto</option><option value="income">Ingreso</option><option value="investment">Inversión</option></select></label>
                 <label>Qué quieres añadir<select value={categoryKind} onChange={(event) => { setCategoryKind(event.target.value as "category" | "subcategory"); setActionError(""); }}><option value="category">Categoría</option><option value="subcategory">Subcategoría</option></select></label>
                 {categoryKind === "subcategory" && <label>Dentro de<select name="parentName" value={selectedCategory} onChange={(event) => setSelectedCategory(event.target.value)} required>{rootCategories.map((category) => <option key={category}>{category}</option>)}</select></label>}
-                <label>Nombre<input name="name" maxLength={40} placeholder={categoryKind === "category" ? "Ej. Mascotas" : "Ej. Veterinario"} required autoFocus /></label>
+                <label>Nombre<input name="name" maxLength={40} placeholder={categoryKind === "category" ? "Ej. Mascotas" : "Ej. Veterinario"} required /></label>
                 {actionError && <p className="error-message">{actionError}</p>}
                 <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModal("movement")}>Volver</button><button type="submit" className="primary-button" disabled={saving}>{saving ? "Guardando..." : "Guardar categoría"}</button></div>
               </form>
