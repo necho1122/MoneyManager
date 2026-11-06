@@ -398,8 +398,8 @@ a { color: inherit; text-decoration: none; }
   .delete-button { width: 38px; height: 38px; opacity: 1; }
   .movement-table td { min-height: 48px; }
 
-  .modal-backdrop { position: fixed; inset: var(--modal-viewport-offset-top, 0) 0 auto; display: flex; height: var(--modal-viewport-height, 100dvh); align-items: stretch; padding: 0; overflow: hidden; overscroll-behavior: contain; }
-  .modal { display: flex; width: 100%; max-width: none; height: 100%; max-height: none; min-height: 0; flex-direction: column; overflow: hidden; padding: max(16px, env(safe-area-inset-top)) 16px max(10px, env(safe-area-inset-bottom)); border: 0; border-radius: 0; box-shadow: none; overscroll-behavior: contain; }
+  .modal-backdrop { position: fixed; inset: var(--modal-viewport-offset-top, 0) 0 auto; display: flex; height: var(--modal-viewport-height, 100dvh); align-items: center; justify-content: center; padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); overflow: hidden; overscroll-behavior: contain; }
+  .modal { display: flex; width: min(100%, 480px); height: min(100%, 760px); max-height: 100%; min-height: 0; flex-direction: column; overflow: hidden; padding: 18px 16px; border: 0; border-radius: 16px; box-shadow: 0 18px 65px rgba(27, 28, 42, .2); overscroll-behavior: contain; }
   .modal-heading { flex: 0 0 auto; align-items: center; gap: 10px; margin-bottom: 12px; padding: 2px 0 12px; border-bottom: 1px solid #f0eff3; }
   .modal-heading h2 { font-size: 20px; line-height: 1.25; }
   .modal-heading > div { min-width: 0; }
